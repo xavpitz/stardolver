@@ -69,11 +69,9 @@
     } else {
       class ErrorBoundary extends React.Component {
         state = { hasError: false, error: null };
-
         static getDerivedStateFromError(error) {
           return { hasError: true, error };
         }
-
         render() {
           if (this.state.hasError) {
             return (
@@ -140,6 +138,42 @@
           fetchData();
         }, []);
 
+        // Auto-submit feedback when all fields are set
+        React.useEffect(() => {
+          const allFeedbackSet = Object.values(feedback).every(v => v !== null);
+          if (allFeedbackSet && selectedShip) {
+            submitFeedback();
+          }
+        }, [feedback, selectedShip]);
+
+        const getAttrValue = (ship, attr) => {
+          if (attr === 'price') return parseFloat(ship.price[0]);
+          if (attr === 'length' || attr === 'cargo') return parseFloat(ship[attr]);
+          if (attr === 'crew' || attr === 'releaseYear') return ship[attr];
+          return null;
+        };
+
+        const calculateInfoGain = (ship, possibleShips) => {
+          const attributes = ['length', 'price', 'cargo', 'crew', 'releaseYear'];
+          let totalInfoGain = 0;
+          attributes.forEach(attr => {
+            const value = getAttrValue(ship, attr);
+            const lessThan = possibleShips.filter(s => getAttrValue(s, attr) < value).length;
+            const equalTo = possibleShips.filter(s => getAttrValue(s, attr) === value).length;
+            const greaterThan = possibleShips.filter(s => getAttrValue(s, attr) > value).length;
+            const infoGain = Math.min(lessThan, equalTo, greaterThan);
+            totalInfoGain += infoGain;
+          });
+          return totalInfoGain;
+        };
+
+        const sortedPossibleShipsWithInfo = React.useMemo(() => {
+          return possibleShips.map(ship => ({
+            ship,
+            infoGain: calculateInfoGain(ship, possibleShips),
+          })).sort((a, b) => b.infoGain - a.infoGain);
+        }, [possibleShips]);
+
         const selectRandomShip = () => {
           if (possibleShips.length === 0) {
             setError('No remaining ships to select from');
@@ -160,18 +194,16 @@
             setInputValue(possibleShips[0].shipName);
             return;
           }
-
           const attributes = ['length', 'price', 'cargo', 'crew', 'releaseYear'];
           let bestShip = null;
           let maxInfoGain = -1;
-
           possibleShips.forEach(ship => {
             let totalInfoGain = 0;
             attributes.forEach(attr => {
-              const value = parseFloat(ship[attr]) || parseInt(ship[attr]);
-              const lessThan = possibleShips.filter(s => (parseFloat(s[attr]) || parseInt(s[attr])) < value).length;
-              const equalTo = possibleShips.filter(s => (parseFloat(s[attr]) || parseInt(s[attr])) === value).length;
-              const greaterThan = possibleShips.filter(s => (parseFloat(s[attr]) || parseInt(s[attr])) > value).length;
+              const value = getAttrValue(ship, attr);
+              const lessThan = possibleShips.filter(s => getAttrValue(s, attr) < value).length;
+              const equalTo = possibleShips.filter(s => getAttrValue(s, attr) === value).length;
+              const greaterThan = possibleShips.filter(s => getAttrValue(s, attr) > value).length;
               const infoGain = Math.min(lessThan, equalTo, greaterThan);
               totalInfoGain += infoGain;
             });
@@ -180,7 +212,6 @@
               bestShip = ship;
             }
           });
-
           setPreSelectedShip(bestShip);
           setInputValue(bestShip.shipName);
         };
@@ -207,10 +238,6 @@
 
         const handleFeedbackChange = (key, value) => {
           setFeedback((prev) => ({ ...prev, [key]: value }));
-          const allSet = Object.values({ ...feedback, [key]: value }).every(v => v !== null);
-          if (allSet) {
-            submitFeedback();
-          }
         };
 
         const submitFeedback = () => {
@@ -218,26 +245,23 @@
             setError('No ship selected');
             return;
           }
-
+          console.log('Feedback before filtering:', feedback);
           const newPossibleShips = possibleShips.filter((ship) => {
             try {
               if (feedback.manufacturer === 'correct' && ship.manufacturer !== selectedShip.manufacturer) return false;
               if (feedback.manufacturer === 'incorrect' && ship.manufacturer === selectedShip.manufacturer) return false;
-
               if (feedback.roles === 'correct') {
                 if (ship.roles.length !== selectedShip.roles.length || !ship.roles.every((role) => selectedShip.roles.includes(role))) return false;
               }
               if (feedback.roles === 'incorrect' && ship.roles.length === selectedShip.roles.length && ship.roles.every((role) => selectedShip.roles.includes(role))) return false;
               if (feedback.roles === 'partial' && !ship.roles.some((role) => selectedShip.roles.includes(role))) return false;
-
               const numericalChecks = [
                 { key: 'length', value: parseFloat(ship.length), compare: parseFloat(selectedShip.length) },
                 { key: 'price', value: parseFloat(ship.price[0]), compare: parseFloat(selectedShip.price[0]) },
                 { key: 'cargo', value: parseFloat(ship.cargo), compare: parseFloat(selectedShip.cargo) },
-                { key: 'crew', value: parseInt(ship.crew), compare: parseInt(selectedShip.crew) },
-                { key: 'releaseYear', value: parseInt(ship.releaseYear), compare: parseInt(selectedShip.releaseYear) },
+                { key: 'crew', value: ship.crew, compare: selectedShip.crew },
+                { key: 'releaseYear', value: ship.releaseYear, compare: selectedShip.releaseYear },
               ];
-
               return numericalChecks.every(({ key, value, compare }) => {
                 if (!feedback[key]) return true;
                 if (feedback[key] === 'correct') return value === compare;
@@ -250,33 +274,32 @@
               return false;
             }
           });
-
+          console.log('Filtered ships:', newPossibleShips.map(s => `${s.shipName} - ${s.releaseYear}`));
           setPossibleShips(newPossibleShips);
 
           const updatedGuessedValues = { ...guessedValues };
-          if (feedback.manufacturer === 'correct') updatedGuessedValues.manufacturer = selectedShip.manufacturer;
-          if (feedback.roles === 'correct') updatedGuessedValues.roles = selectedShip.roles;
-
-          const numericalAttrs = ['length', 'price', 'cargo', 'crew', 'releaseYear'];
-          numericalAttrs.forEach(attr => {
-            if (feedback[attr]) {
-              const compare = parseFloat(selectedShip[attr]) || parseInt(selectedShip[attr]);
-              if (feedback[attr] === 'correct') {
-                updatedGuessedValues[attr].min = compare;
-                updatedGuessedValues[attr].max = compare;
-              } else if (feedback[attr] === 'less') {
-                if (updatedGuessedValues[attr].max === null || compare < updatedGuessedValues[attr].max) {
-                  updatedGuessedValues[attr].max = compare - 1;
-                }
-              } else if (feedback[attr] === 'greater') {
-                if (updatedGuessedValues[attr].min === null || compare > updatedGuessedValues[attr].min) {
-                  updatedGuessedValues[attr].min = compare + 1;
-                }
-              }
-            }
-          });
-
+          if (newPossibleShips.length > 0) {
+            const manufacturers = new Set(newPossibleShips.map(s => s.manufacturer));
+            updatedGuessedValues.manufacturer = manufacturers.size === 1 ? newPossibleShips[0].manufacturer : null;
+            const rolesList = newPossibleShips.map(s => s.roles.sort().join(','));
+            const allRolesSame = rolesList.every(r => r === rolesList[0]);
+            updatedGuessedValues.roles = allRolesSame ? newPossibleShips[0].roles : null;
+            const numericalAttrs = ['length', 'price', 'cargo', 'crew', 'releaseYear'];
+            numericalAttrs.forEach(attr => {
+              const values = newPossibleShips.map(s => getAttrValue(s, attr));
+              updatedGuessedValues[attr].min = Math.min(...values);
+              updatedGuessedValues[attr].max = Math.max(...values);
+            });
+          } else {
+            updatedGuessedValues.manufacturer = null;
+            updatedGuessedValues.roles = null;
+            numericalAttrs.forEach(attr => {
+              updatedGuessedValues[attr].min = null;
+              updatedGuessedValues[attr].max = null;
+            });
+          }
           setGuessedValues(updatedGuessedValues);
+
           setError(newPossibleShips.length === 0 ? 'No ships match your feedback. Try again.' : null);
           setFeedback({
             manufacturer: null,
@@ -310,16 +333,16 @@
             'Gatac': 'GATX',
             'Kruger': 'KRGR',
           };
-
           const apiShip = shipImages.find((imgShip) => {
             if (!imgShip || !imgShip.manufacturer || !imgShip.manufacturer.code || !imgShip.name) {
               console.warn(`Skipping invalid API ship entry: ${JSON.stringify(imgShip)}`);
               return false;
             }
             const mappedCode = manufacturerMap[ship.manufacturer];
+            if (!mappedCode) console.warn(`No manufacturer code mapping for ${ship.manufacturer} (${ship.shipName})`);
             return mappedCode && imgShip.manufacturer.code === mappedCode && imgShip.name.toLowerCase() === ship.shipName.toLowerCase();
           });
-
+          if (!apiShip) console.log(`No image found for ${ship.shipName} (${ship.manufacturer})`);
           return apiShip ? {
             avatar: apiShip.media?.[0]?.images?.avatar || '',
             large: apiShip.media?.[0]?.source_url || '',
@@ -353,29 +376,6 @@
           setHasSelectedOnce(false);
         };
 
-        const isImpossibleShip = (ship) => !possibleShips.some(ps => ps.shipName === ship.shipName);
-
-        const getValueClass = (key, value) => {
-          if (!preSelectedShip || !isImpossibleShip(preSelectedShip)) return 'text-gray-200';
-          const attrMap = { price: 'price[0]', value: 'price[0]' };
-          const shipValue = parseFloat(preSelectedShip[attrMap[key] || key]) || parseInt(preSelectedShip[key]);
-          const min = guessedValues[key].min;
-          const max = guessedValues[key].max;
-          if ((min !== null && shipValue < min) || (max !== null && shipValue > max)) return 'text-red-400';
-          return 'text-gray-200';
-        };
-
-        const getHint = (key) => {
-          if (!preSelectedShip || !isImpossibleShip(preSelectedShip)) return '';
-          const attrMap = { price: 'price[0]', value: 'price[0]' };
-          const shipValue = parseFloat(preSelectedShip[attrMap[key] || key]) || parseInt(preSelectedShip[key]);
-          const min = guessedValues[key].min;
-          const max = guessedValues[key].max;
-          if (min !== null && shipValue < min) return '↑';
-          if (max !== null && shipValue > max) return '↓';
-          return '';
-        };
-
         if (isLoading) {
           return (
             <div className="container mx-auto p-4 text-center">
@@ -407,7 +407,7 @@
             {/* Ship Pre-Selection */}
             <div className="mb-6">
               <h2 className="text-xl font-semibold mb-2 text-white">{hasSelectedOnce ? 'Pre-Select a Ship' : 'Select a Ship'}</h2>
-              <div className="flex gap-2 items-center">
+              <div className="flex gap-2 items-center flex-wrap">
                 <input
                   type="text"
                   list="shipNames"
@@ -428,14 +428,14 @@
                 <button
                   onClick={selectRandomShip}
                   disabled={possibleShips.length === 0}
-                  className="px-4 py-2 bg-blue-600 hover:bg-blue-700 rounded text-white font-bold disabled:bg-gray-600 disabled:cursor-not-allowed whitespace-nowrap"
+                  className="px-4 py-2 bg-blue-600 hover:bg-blue-700 rounded text-white font-bold disabled:bg-gray-600 disabled:cursor-not-allowed"
                 >
                   Random Ship
                 </button>
                 <button
                   onClick={selectBestShip}
                   disabled={possibleShips.length === 0}
-                  className="px-4 py-2 bg-purple-600 hover:bg-purple-700 rounded text-white font-bold disabled:bg-gray-600 disabled:cursor-not-allowed whitespace-nowrap"
+                  className="px-4 py-2 bg-purple-600 hover:bg-purple-700 rounded text-white font-bold disabled:bg-gray-600 disabled:cursor-not-allowed"
                 >
                   Best Ship
                 </button>
@@ -456,14 +456,15 @@
                     />
                   )}
                   <div>
-                    <p className="text-gray-200"><strong className="text-white">Pre-Selected Ship:</strong> {preSelectedShip.shipName}</p>
-                    <p className="text-gray-200"><strong className="text-white">Manufacturer:</strong> {preSelectedShip.manufacturer}</p>
-                    <p className="text-gray-200"><strong className="text-white">Roles:</strong> {preSelectedShip.roles.join(', ')}</p>
-                    <p className={getValueClass('length')}><strong className="text-white">Length:</strong> {preSelectedShip.length} m {getHint('length')}</p>
-                    <p className={getValueClass('price')}><strong className="text-white">Value:</strong> ${preSelectedShip.price[0]} {getHint('price')}</p>
-                    <p className={getValueClass('cargo')}><strong className="text-white">Cargo:</strong> {preSelectedShip.cargo} SCU {getHint('cargo')}</p>
-                    <p className={getValueClass('crew')}><strong className="text-white">Crew:</strong> {preSelectedShip.crew} {getHint('crew')}</p>
-                    <p className={getValueClass('releaseYear')}><strong className="text-white">Release Year:</strong> {preSelectedShip.releaseYear} {getHint('releaseYear')}</p>
+                    <p className="text-white font-bold">{preSelectedShip.shipName}</p>
+                    <p className="text-blue-400">InfoGain: {calculateInfoGain(preSelectedShip, possibleShips)}</p>
+                    <p className="text-gray-200">Manufacturer: {preSelectedShip.manufacturer}</p>
+                    <p className="text-gray-200">Roles: {preSelectedShip.roles.join(', ')}</p>
+                    <p className="text-gray-200">Length: {preSelectedShip.length} m</p>
+                    <p className="text-gray-200">Value: ${preSelectedShip.price[0]}</p>
+                    <p className="text-gray-200">Cargo: {preSelectedShip.cargo} SCU</p>
+                    <p className="text-gray-200">Crew: {preSelectedShip.crew}</p>
+                    <p className="text-gray-200">Release Year: {preSelectedShip.releaseYear}</p>
                   </div>
                   <button
                     onClick={confirmShipSelection}
@@ -736,10 +737,17 @@
             <div>
               <h2 className="text-xl font-semibold mb-2 text-white">Possible Remaining Ships ({possibleShips.length})</h2>
               <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-                {possibleShips.map((ship) => {
+                {sortedPossibleShipsWithInfo.map(({ ship, infoGain }) => {
                   const images = getShipImage(ship);
                   return (
-                    <div key={ship.id} className="p-4 bg-gray-800 rounded border border-gray-700 flex items-start">
+                    <div
+                      key={ship.id}
+                      className="p-4 bg-gray-800 rounded border border-gray-700 flex items-start cursor-pointer"
+                      onClick={() => {
+                        setPreSelectedShip(ship);
+                        setInputValue(ship.shipName);
+                      }}
+                    >
                       {images.avatar && (
                         <img
                           src={images.avatar}
@@ -750,6 +758,7 @@
                       )}
                       <div>
                         <p className="text-white font-bold">{ship.shipName}</p>
+                        <p className="text-blue-400">InfoGain: {infoGain}</p>
                         <p className="text-gray-200">Manufacturer: {ship.manufacturer}</p>
                         <p className="text-gray-200">Roles: {ship.roles.join(', ')}</p>
                         <p className="text-gray-200">Length: {ship.length} m</p>
